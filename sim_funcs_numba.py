@@ -3,13 +3,13 @@ from numpy.random import choice
 import random
 import matplotlib.pyplot as plt
 from scipy.integrate import odeint 
-from numba import jit
+from numba import jit,njit
 ##standing wave solution of Fisher wave
 
 
 ## given  ab array with counts and an array withprobabilities return index from first array
 # faster than np.random.choice for smallish arrays
-
+@jit
 def choice(options,probs):
     x = np.random.rand()
     cum = 0
@@ -22,7 +22,7 @@ def choice(options,probs):
 
 
 ##generate a standing wave solution of fisher equations - i.e. an 'established' wave front
-
+@jit
 def standing_wave(y0,x,D,rw):
     w = y0[0]      ##initial value for wave profile at x =0, i.e. w(x=0)
     z = y0[1]      ##initial value for rate of change of profile w.r.t. position x , at x=0 i.e. dw/dx(x=0)
@@ -32,7 +32,7 @@ def standing_wave(y0,x,D,rw):
     return [dwdx,dzdx]
 
 ### given a deme return that deme and a random neighbor
-
+@jit
 def rand_neighbors(n_demes):
     ind_1 = np.random.randint(n_demes)
     if ind_1 == 0:
@@ -47,17 +47,16 @@ def rand_neighbors(n_demes):
                 ind_2 = ind_1+1
     return np.array([ind_1,ind_2])
 
-
 ##convert array of cell counts for each fitness
 ## to an array for each cell with its identity (fitness)
-
+@jit
 def counts_to_cells(counts,n_allele):
     cells = np.repeat(np.arange(n_allele+1),counts)
     return cells
 
 ##convert array of each cell with its identity (fitness)cell counts for each fitness
 ## to an array of cell counts for each fitness  
-
+@jit
 def cells_to_counts(cells,n_allele):
     counts = np.bincount(cells, minlength=n_allele+1)
     return counts
@@ -65,10 +64,13 @@ def cells_to_counts(cells,n_allele):
 
 ## initialize array of number of spaces and number wild type cells for each deme 
 ##using standing wave solution. 
-
+@jit
+def standing_wave_solve(K):
+    return odeint(standing_wave,[1,-(2*2**.5)/K],np.arange(70),args=(2*2**.5,1))[:,0]
+@jit
 def initialize(K,n_allele,mu):
     ## generate standing wave
-    stand = odeint(standing_wave,[1,-(2*2**.5)/K],np.arange(70),args=(2*2**.5,1))[:,0]
+    stand = standing_wave_solve(K)
     ## cuttoff non integer cell density based off of carry capacity K
 
     w_0 = (K*stand).astype(int)
@@ -88,18 +90,15 @@ def initialize(K,n_allele,mu):
     return L.astype(int), L_empty
  
 ## take two neighboring demes, pick a particle from each and exchange them    
-
+@jit
 def migration(cell_counts,n_allele,K):
     empty_cnt_1,empty_cnt_2 = np.zeros(n_allele+1),np.zeros(n_allele+1)
 
     ## pick a cell from each deme
-    try:
-     
-        chosen_1 = choice(np.arange(n_allele+1), cell_counts[0]/K)
-        chosen_2 = choice(np.arange(n_allele+1), cell_counts[1]/K)
-    except:
-        chosen_1 = choice(np.arange(n_allele+1), cell_counts[0]/np.sum(cell_counts[0]))
-        chosen_2 = choice(np.arange(n_allele+1), cell_counts[1]/np.sum(cell_counts[0]))
+
+
+    chosen_1 = choice(np.arange(n_allele+1), cell_counts[0]/np.sum(cell_counts[0]))
+    chosen_2 = choice(np.arange(n_allele+1), cell_counts[1]/np.sum(cell_counts[0]))
     
     ## format chosen cell interms of array as [empty cell count, ...,, chosen cell count  ]
     empty_cnt_1[chosen_1] =1
@@ -113,19 +112,16 @@ def migration(cell_counts,n_allele,K):
 
 
 #from one chosen deme pick two cells and exchange the first with second one with some proability
-
+@jit
 def duplication(cell_counts,K,P,n_allele):
 
     #pick two cells randomly from chosen deme. yes, i know i use list.append but np append was slower
     ## when i timed it 
     picks = []
     for i in range(2):
-        try:
-            picks.append(choice(np.arange(n_allele+1),
-                              cell_counts/K))
-        except:
-            picks.append(choice(np.arange(n_allele+1),
-                              cell_counts/np.sum(cell_counts)))
+
+        picks.append(choice(np.arange(n_allele+1),
+                          cell_counts/np.sum(cell_counts)))
             
     ## format chosen cells in terms of cell counts i.e. [empty cell count,...,chosen cell count]
     empty_cnt_1,empty_cnt_2 = np.zeros(n_allele+1),np.zeros(n_allele+1)
@@ -138,14 +134,12 @@ def duplication(cell_counts,K,P,n_allele):
     
 ## from randomly chosen deme pick random cell and give it a mutation (change its genotype) with
 ## some probability
-
+@jit
 def mutation(cell_counts,mu,K,n_allele):
-    try:
-        pick=choice(np.arange(n_allele+1),
-                              cell_counts/K)
-    except:
-        pick=choice(np.arange(n_allele+1),
-                              cell_counts/np.sum(cell_counts))
+
+
+    pick=choice(np.arange(n_allele+1),
+                          cell_counts/np.sum(cell_counts))
         
 
 
@@ -167,7 +161,7 @@ def mutation(cell_counts,mu,K,n_allele):
 
 
 ## shift simulation box
-
+@jit
 def recenter(L,L_empty, K):
     shift = 0
     ##track how many demes are to be omitted
@@ -182,7 +176,7 @@ def recenter(L,L_empty, K):
 
 
 ## one update setp includes on migration, duplication and mutation step 
-
+@jit
 def update(L, ## population
     L_empty, ## empty deme structure
     P, ## porbability matrix for mutation
@@ -207,12 +201,10 @@ def update(L, ## population
         mut_deme = np.random.randint(n_demes)
         
         L[mut_deme] = mutation(L[mut_deme],mu,K,n_allele)
-        
-
 
         return L
 ## run simulation for chosen number of generation
-
+@jit
 def run_spatial(n_gen,## nunmber of gnerations
     K, ## population size
     landscape ## fitness landscape (Growthrates of each genotype (should be <<1))
@@ -225,13 +217,13 @@ def run_spatial(n_gen,## nunmber of gnerations
     P = np.ones((n_allele+1,n_allele+1))
     P[0,1:] = 1 - landscape
     muts =0
-    L , L_empty = initialize(*func_args)
+    L , L_empty = initialize(K,n_allele,mu)
     L_history=[L]
     #begin evolution
     for t in range(n_gen):
         for dt in range(K):
             ## perform one simulation step
-            L= update(L,L_empty,P,*func_args)
+            L= update(L,L_empty,P,K,n_allele,mu)
             ##recenter simulation box
             L= recenter(L,L_empty,K)
         ##save
@@ -239,7 +231,7 @@ def run_spatial(n_gen,## nunmber of gnerations
     return L_history
 
 ## run simulation until a fixation event occurs (fixation to some threshold 'thresh')
-
+@jit
 def fix_time_spatial(K,landscape,mu,thresh):
     n_allele = len(landscape)
     func_args = [K,n_allele,mu]
@@ -279,7 +271,7 @@ def fix_time_spatial(K,landscape,mu,thresh):
 
 #Run the automaton
 #Implements cell division. The division rates are based on the experimental data
-
+@jit
 def run_mixed(n_gen,fit_land,  # number of genetaions Fitness landscape (growth rates - should be <<1)
                   mut_rate=0.1,  # probability of mutation per generation
                   max_cells=10**5,  # Max number of cells 
@@ -321,7 +313,7 @@ def run_mixed(n_gen,fit_land,  # number of genetaions Fitness landscape (growth 
     return count_history
 #Run the automaton
 #Implements cell division. The division rates are based on the experimental data
-
+@jit
 def fix_time_mixed(fit_land,  # Fitness landscape
                   mut_rate=0.1,  # probability of mutation per generation
                   max_cells=10**5,  # Max number of cells 
